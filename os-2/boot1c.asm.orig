@@ -5,7 +5,7 @@ HANDLERS_TBL    equ 0x07e00      ; the list of handlers
 STACK_POINTER   equ 0x0ffff      ; 64K
 
         org     0x7c00
-	db      0xeb,0x3c,0x90  ; jmp start
+        jmp     start
 
         db      "Titech  "      ; OEM name (8 bytes)
         dw      512             ; sector size
@@ -24,6 +24,46 @@ STACK_POINTER   equ 0x0ffff      ; 64K
         dd      0xffffffff      ; volume serial number
         db      "BOOT_DISK  "	; volume label (11 bytes)
         db      "FAT12   "      ; file system name (8 bytes)
+
+;;; print a message
+print:
+        mov     ah,0x0e
+.loop
+        mov     al,[bx]
+        cmp     al,0x00
+        jnz     .next
+        ret
+.next
+        int     10h             ; BIOS call
+        inc     bx
+        jmp     .loop
+
+;;; read one cyliner
+;;; ax: destination address / 0x10
+;;; dh: head (0 or 1)
+;;; ch: cyliner (0..)
+read_cylinder:
+        mov     es,ax           ; destination address = [es:bx]
+        mov     bx,0
+        mov     dl,0            ; drive 0 
+        mov     cl,1            ; from sector 1
+        mov     ah,0x02
+        mov     al,18           ; all 18 sectors
+        int     0x13            ; BIOS call
+        jnc     .next
+        mov     bx,read_err
+        call    print
+        hlt                     ; error
+.next
+        ret
+
+;;; wait until the keyboard is ready
+wait_kdb:
+        in      al,0x64
+        and     al,0x02
+        in      al,0x60
+        jnz     wait_kdb
+        ret
 
 ;;; initial loader
 ;;;
@@ -126,46 +166,6 @@ start:
 .next2:
         ;; jump to boot2
         jmp dword 0x8000
-
-;;; print a message
-print:
-        mov     ah,0x0e
-.loop
-        mov     al,[bx]
-        cmp     al,0x00
-        jnz     .next
-        ret
-.next
-        int     10h             ; BIOS call
-        inc     bx
-        jmp     .loop
-
-;;; read one cyliner
-;;; ax: destination address / 0x10
-;;; dh: head (0 or 1)
-;;; ch: cyliner (0..)
-read_cylinder:
-        mov     es,ax           ; destination address = [es:bx]
-        mov     bx,0
-        mov     dl,0            ; drive 0 
-        mov     cl,1            ; from sector 1
-        mov     ah,0x02
-        mov     al,18           ; all 18 sectors
-        int     0x13            ; BIOS call
-        jnc     .next
-        mov     bx,read_err
-        call    print
-        hlt                     ; error
-.next
-        ret
-
-;;; wait until the keyboard is ready
-wait_kdb:
-        in      al,0x64
-        and     al,0x02
-        in      al,0x60
-        jnz     wait_kdb
-        ret
 
 ;;; messages
 press_key:
