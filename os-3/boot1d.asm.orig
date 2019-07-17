@@ -1,12 +1,26 @@
 ;;;  Initial boot loader
 ;;;
+;;;  Memory map:
+;;;
+;;;  07c00..     : initial boot loader
+;;;  07e00..07eff: interrupt handler table
+;;;  07f00..     : TSS
+;;;  08000..0a3ff: boot2 (boot.obj)
+;;;       ..0ffff: stack area
+;;;  80000..801ff: DMA buffer for FDC
+;;;  90000..90800: IDT
+;;;
+
 IDT_ADDR        equ 0x90000      ; IDT address
+IDT_SIZE        equ 0x800        ; IDT size
 HANDLERS_TBL    equ 0x07e00      ; the list of handlers
+TSS_DATA        equ 0x07f00      ; TSS data structure (104 bytes)
+BOOT2           equ 0x08000      ; the address of boot2
+BOOT2U          equ 0x00800      ; BOOT2 >> 8
 STACK_POINTER   equ 0x0ffff      ; 64K
 
         org     0x7c00
         jmp     start
-	nop                     ; padding (jmp + nop should occupy 3 bytes)
 
         db      "Titech  "      ; OEM name (8 bytes)
         dw      512             ; sector size
@@ -82,10 +96,10 @@ start:
         mov     ax,0x6000
         mov     sp,ax
 
-        mov     ax,0x0800       ; address
+        mov     ax,BOOT2U       ; address
         mov     ch,1            ; cylinder 1
         mov     dh,0            ; head 0
-        call    read_cylinder   ; read the 3rd cylinder
+        call    read_cylinder
 
         mov     al,0xff         ; disable interrupt
         out     0x21,al
@@ -105,16 +119,15 @@ start:
         mov     ah,0x00
         int     0x10            ; BIOS call
 
-        ;; initialize GDT and IDT
+        ;; initialize GDT, TR, and IDT
         mov     bx,gdt_ptr
-        lgdt    [bx]            ; set GDT
-
+        lgdt    [bx]                   ; set GDT
         mov     dword edx,IDT_ADDR     ; IDT 0x90000..0x907ff
 .loop1:
         mov     dword [edx], 0
         mov     dword [edx+4], 0
 	add     dword edx,8
-        cmp     edx,IDT_ADDR+0x800
+        cmp     edx,IDT_ADDR+IDT_SIZE
         jne     .loop1
 
         mov     bx,idt_ptr
@@ -166,7 +179,7 @@ start:
         dw      0x08            ; cs := 0x08
 .next2:
         ;; jump to boot2
-        jmp dword 0x8000
+        jmp dword BOOT2
 
 ;;; messages
 press_key:
@@ -190,9 +203,14 @@ gdt_data:
         ;; segment 0x20
         ;; limit 0xfffff, base 0x0000, access 0x4ff2 (32bit, user, data)
         db      0xff,0xff,0x00,0x00, 0x00,0xf2,0x4f,0x00
+        ;; segment 0x28 (TSS)
+        ;; limit 103, base TSS_DATA, access 0x0089
+        db      103,0x00
+        dw      TSS_DATA
+        db      0x00,0x89,0x00,0x00
 
 gdt_ptr:
-        dw      0x0017          ; limit
+        dw      0x002f          ; limit
         dw      gdt_data        ; lower 16 bits of the GDT address
         dw      0x0000          ; higher 16 bits
 

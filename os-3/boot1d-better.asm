@@ -1,12 +1,26 @@
 ;;;  Initial boot loader
 ;;;
+;;;  Memory map:
+;;;
+;;;  07c00..     : initial boot loader
+;;;  07e00..07eff: interrupt handler table
+;;;  07f00..     : TSS
+;;;  08000..0a3ff: boot2 (boot.obj)
+;;;       ..0ffff: stack area
+;;;  80000..801ff: DMA buffer for FDC
+;;;  90000..90800: IDT
+;;;
+
 IDT_ADDR        equ 0x90000      ; IDT address
+IDT_SIZE        equ 0x800        ; IDT size
 HANDLERS_TBL    equ 0x07e00      ; the list of handlers
+TSS_DATA        equ 0x07f00      ; TSS data structure (104 bytes)
+BOOT2           equ 0x08000      ; the address of boot2
+BOOT2U          equ 0x00800      ; BOOT2 >> 8
 STACK_POINTER   equ 0x0ffff      ; 64K
 
         org     0x7c00
-        jmp     start
-	nop                     ; padding (jmp + nop should occupy 3 bytes)
+	db      0xeb,0x3c,0x90  ; jmp start
 
         db      "Titech  "      ; OEM name (8 bytes)
         dw      512             ; sector size
@@ -26,46 +40,6 @@ STACK_POINTER   equ 0x0ffff      ; 64K
         db      "BOOT_DISK  "	; volume label (11 bytes)
         db      "FAT12   "      ; file system name (8 bytes)
 
-;;; print a message
-print:
-        mov     ah,0x0e
-.loop
-        mov     al,[bx]
-        cmp     al,0x00
-        jnz     .next
-        ret
-.next
-        int     10h             ; BIOS call
-        inc     bx
-        jmp     .loop
-
-;;; read one cyliner
-;;; ax: destination address / 0x10
-;;; dh: head (0 or 1)
-;;; ch: cyliner (0..)
-read_cylinder:
-        mov     es,ax           ; destination address = [es:bx]
-        mov     bx,0
-        mov     dl,0            ; drive 0 
-        mov     cl,1            ; from sector 1
-        mov     ah,0x02
-        mov     al,18           ; all 18 sectors
-        int     0x13            ; BIOS call
-        jnc     .next
-        mov     bx,read_err
-        call    print
-        hlt                     ; error
-.next
-        ret
-
-;;; wait until the keyboard is ready
-wait_kdb:
-        in      al,0x64
-        and     al,0x02
-        in      al,0x60
-        jnz     wait_kdb
-        ret
-
 ;;; initial loader
 ;;;
 start:
@@ -82,10 +56,10 @@ start:
         mov     ax,0x6000
         mov     sp,ax
 
-        mov     ax,0x0800       ; address
+        mov     ax,BOOT2U       ; address
         mov     ch,1            ; cylinder 1
         mov     dh,0            ; head 0
-        call    read_cylinder   ; read the 3rd cylinder
+        call    read_cylinder
 
         mov     al,0xff         ; disable interrupt
         out     0x21,al
@@ -105,16 +79,15 @@ start:
         mov     ah,0x00
         int     0x10            ; BIOS call
 
-        ;; initialize GDT and IDT
+        ;; initialize GDT, TR, and IDT
         mov     bx,gdt_ptr
-        lgdt    [bx]            ; set GDT
-
+        lgdt    [bx]                   ; set GDT
         mov     dword edx,IDT_ADDR     ; IDT 0x90000..0x907ff
 .loop1:
         mov     dword [edx], 0
         mov     dword [edx+4], 0
 	add     dword edx,8
-        cmp     edx,IDT_ADDR+0x800
+        cmp     edx,IDT_ADDR+IDT_SIZE
         jne     .loop1
 
         mov     bx,idt_ptr
@@ -166,7 +139,47 @@ start:
         dw      0x08            ; cs := 0x08
 .next2:
         ;; jump to boot2
-        jmp dword 0x8000
+        jmp dword BOOT2
+
+;;; print a message
+print:
+        mov     ah,0x0e
+.loop
+        mov     al,[bx]
+        cmp     al,0x00
+        jnz     .next
+        ret
+.next
+        int     10h             ; BIOS call
+        inc     bx
+        jmp     .loop
+
+;;; read one cyliner
+;;; ax: destination address / 0x10
+;;; dh: head (0 or 1)
+;;; ch: cyliner (0..)
+read_cylinder:
+        mov     es,ax           ; destination address = [es:bx]
+        mov     bx,0
+        mov     dl,0            ; drive 0 
+        mov     cl,1            ; from sector 1
+        mov     ah,0x02
+        mov     al,18           ; all 18 sectors
+        int     0x13            ; BIOS call
+        jnc     .next
+        mov     bx,read_err
+        call    print
+        hlt                     ; error
+.next
+        ret
+
+;;; wait until the keyboard is ready
+wait_kdb:
+        in      al,0x64
+        and     al,0x02
+        in      al,0x60
+        jnz     wait_kdb
+        ret
 
 ;;; messages
 press_key:
@@ -190,9 +203,14 @@ gdt_data:
         ;; segment 0x20
         ;; limit 0xfffff, base 0x0000, access 0x4ff2 (32bit, user, data)
         db      0xff,0xff,0x00,0x00, 0x00,0xf2,0x4f,0x00
+        ;; segment 0x28 (TSS)
+        ;; limit 103, base TSS_DATA, access 0x0089
+        db      103,0x00
+        dw      TSS_DATA
+        db      0x00,0x89,0x00,0x00
 
 gdt_ptr:
-        dw      0x0017          ; limit
+        dw      0x002f          ; limit
         dw      gdt_data        ; lower 16 bits of the GDT address
         dw      0x0000          ; higher 16 bits
 

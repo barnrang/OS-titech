@@ -21,6 +21,7 @@ STACK_POINTER   equ 0x0ffff      ; 64K
 
         org     0x7c00
         jmp     start
+	nop                     ; padding (jmp + nop should occupy 3 bytes)
 
         db      "Titech  "      ; OEM name (8 bytes)
         dw      512             ; sector size

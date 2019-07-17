@@ -71,7 +71,7 @@ int syscall(int a, int b) {
 int in8(int port) {
   int value;
   asm volatile ("mov $0, %%eax\n\tin %%dx,%%al"
-                : "=r" (value) : "d" (port));
+                : "=a" (value) : "d" (port));
   return value;
 }
 

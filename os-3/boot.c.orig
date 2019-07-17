@@ -1,94 +1,53 @@
+#define FDC_DMA_BUF_ADDR   0x80000
+#define FDC_DMA_BUF_SIZE   512
+
 #define KBD_STATUS    0x64
 #define KBD_DATA      0x60
 #define KEY_UP_BIT    0x80
 #define SCREEN_WIDTH  320
 
-int timer_counter = 0;
-int blue[5];
-int yellow[5];
-int idle[5];
-int blue_ends, yellow_ends;
-int* running_thread;
+int fdc_running = 0;
 
-/* 各種設定が終わると、最初に boot() が呼ばれる
+/* 各種設定が終わると、boot2d.asm から boot() が呼ばれる
  */
 void boot() {
-  make_blue_thread();
-  make_yellow_thread();
-  running_thread = idle;
   register_handlers();
+
+  /* ここで pingpong.exe を読み込んで実行する */
 
   while (1)
     halt();
 }
 
-int draw_yellow_line(int y, int interval) {
-  int i;
-  char* vram = (char*)0xa0000 + SCREEN_WIDTH * y;
-
-  for (i = 0; i < 300; i++) {
-    *vram++ = 14;
-    int c = timer_counter;
-    while (timer_counter < c + interval)
-      halt();
-  }
-
-  yellow_ends = 1;
+int fdc_handler() {
+  out8(0x20, 0x66);	/* フロッピーディスク割り込み (IRQ6) を再度有効にする */
+  fdc_running = 0;
 }
 
-int draw_blue_line(int y, int interval) {
-  int i;
-  char* vram = (char*)0xa0000 + SCREEN_WIDTH * y;
-
-  for (i = 0; i < 300; i++) {
-    *vram++ = 3;
-    int c = timer_counter;
-    while (timer_counter < c + interval)
-      halt();
-  }
-
-  blue_ends = 1;
-}
-
-int kbd_handler() {
+int null_kbd_handler() {
   out8(0x20, 0x61);	/* キーボード割り込み (IRQ1) を再度有効にする */
-  in8(KBD_DATA);
+  in8(KBD_DATA);        /* キー・コードの読み込み */
 }
 
-int make_blue_thread() {
-  blue_ends = 0;
-  make_thread(blue, 0x1ffff, draw_blue_line, 100, 5);
-}
-
-int make_yellow_thread() {
-  yellow_ends = 0;
-  make_thread(yellow, 0x2ffff, draw_yellow_line, 50, 1);
-}
-
-int timer_handler() {
-  int* thread;
-  int* old_thread;
-
+int null_timer_handler() {
   out8(0x20, 0x60);	/* タイマー割り込み (IRQ0) を再度有効にする */
-  timer_counter++;
+}
 
-  if (running_thread == idle && blue_ends == 0)
-    thread = blue;
-  else
-    thread = idle;
+int syscall_handler(int* regs) {
+  int a = regs[0];
+  int b = regs[1];
 
-  old_thread = running_thread;
-  running_thread = thread;
-  sti();
-  context_switch(old_thread, thread);
+  return 0;
 }
 
 /* 割り込み処理関数を登録する
  */
 int register_handlers() {
   int* ptr = (int*)0x7e00;
-  *ptr = (int)kbd_handler;
-  *(ptr + 1) = (int)timer_handler;
+  *ptr = (int)null_kbd_handler;
+  *(ptr + 1) = (int)null_timer_handler;
+  *(ptr + 2) = (int)fdc_handler;
+  *(ptr + 4) = (int)syscall_handler;
 
   out8(0x43,0x34);	/* timer */
   out8(0x40,0x9c);	/* 0x2e9c: 100Hz */
@@ -102,18 +61,29 @@ int register_handlers() {
 int print(int num, int x, int y, int color) {
   static char bitmaps[][4] = {
     { 0x7e, 0x81, 0x81, 0x7e },	/* 0 */
-    { 0x00, 0x41, 0xff, 0x01 }	/* 1 */
+    { 0x00, 0x41, 0xff, 0x01 },	/* 1 */
+    { 0x43, 0x85, 0x89, 0x71 },	/* 2 */
+    { 0x42, 0x81, 0x91, 0x6e },	/* 3 */
+    { 0x38, 0x48, 0xff, 0x08 },	/* 4 */
+    { 0xfa, 0x91, 0x91, 0x8e },	/* 5 */
+    { 0x3e, 0x51, 0x91, 0x0e },	/* 6 */
+    { 0xc0, 0x83, 0x8c, 0xf0 },	/* 7 */
+    { 0x6e, 0x91, 0x91, 0x6e },	/* 8 */
+    { 0x70, 0x89, 0x8a, 0x7c }	/* 9 */
   };
 
   int i, j;
   char* vram = (char*)0xa0000;
   char* map = bitmaps[num];
-  vram += y * SCREEN_WIDTH;
+  vram += (y * SCREEN_WIDTH + x);
+
   for (i = 0; i < 8; i++) {
     for (j = 0; j < 4; j++) {
       char bits = map[j];
       if (bits & (0x80 >> i))
-        *(vram + y * 320 + x + j) = color;
+        *(vram + j) = color;
+      else
+	*(vram + j) = 0;
     }
 
     vram += SCREEN_WIDTH;
@@ -127,7 +97,7 @@ int print(int num, int x, int y, int color) {
 int in8(int port) {
   int value;
   asm volatile ("mov $0, %%eax\n\tin %%dx,%%al"
-                : "=a" (value) : "d" (port));
+                : "=r" (value) : "d" (port));
   return value;
 }
 
