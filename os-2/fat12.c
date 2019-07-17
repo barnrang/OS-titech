@@ -21,7 +21,11 @@ void boot2() {
   ptr[1] = 'B';
 
   fdc_running = 1;
-  fdc_write(0, 0, 1);
+  int n = 35;
+  int c = n / 36;
+  int h = (n - 36 * c) / 18;
+  int s = n - 36 * c - 18 * h + 1;
+  fdc_write(c, h, s);
   while (fdc_running)
     halt();
 
